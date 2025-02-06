@@ -1,0 +1,33 @@
+{
+  "name": "serial-config-app",
+  "version": "1.0.0",
+  "description": "Serial Configuration Application",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:css": "tailwindcss -i src/renderer/input.css -o src/renderer/styles.css",
+    "watch:css": "tailwindcss -i src/renderer/input.css -o src/renderer/styles.css --watch"
+  },
+  "build": {
+    "appId": "com.serial-config-app",
+    "mac": {
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.17",
+    "electron": "^25.8.0",
+    "electron-builder": "^24.9.1",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1"
+  },
+  "dependencies": {
+    "daisyui": "^4.6.1",
+    "electron-store": "^8.1.0",
+    "serialport": "^10.5.0"
+  }
+}

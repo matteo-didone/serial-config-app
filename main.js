@@ -7,19 +7,26 @@ const store = new Store();
 let mainWindow;
 let serialPort = null;
 let lastPortList = [];
-let serialMonitorActive = false;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, 'preload.js')
         }
     });
 
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    // In development, load from Vite dev server
+    if (process.env.NODE_ENV === 'development') {
+        mainWindow.loadURL('http://localhost:5173');
+        // Open DevTools in development
+        mainWindow.webContents.openDevTools();
+    } else {
+        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    }
 }
 
 app.whenReady().then(createWindow);
@@ -36,7 +43,7 @@ app.on('activate', () => {
     }
 });
 
-// Improved serial port listing with change detection
+// Serial port listing with change detection
 async function getSerialPorts() {
     try {
         const ports = await SerialPort.list();
@@ -47,7 +54,6 @@ async function getSerialPorts() {
             productId: port.productId || 'Unknown'
         }));
 
-        // Check if the port list has changed
         const hasChanged = JSON.stringify(portList) !== JSON.stringify(lastPortList);
         if (hasChanged) {
             lastPortList = portList;
@@ -62,12 +68,11 @@ async function getSerialPorts() {
     }
 }
 
-// Serial port listing
+// IPC Handlers
 ipcMain.handle('get-serial-ports', async () => {
     return await getSerialPorts();
 });
 
-// Enhanced serial connection with auto-reconnect
 ipcMain.handle('connect-serial', async (event, portConfig) => {
     try {
         if (serialPort && serialPort.isOpen) {
@@ -85,23 +90,28 @@ ipcMain.handle('connect-serial', async (event, portConfig) => {
             autoOpen: false
         });
 
+        // Setup data handling for serial plotter
+        serialPort.on('data', (data) => {
+            try {
+                // Assume CSV format for plotter data
+                const values = data.toString().trim().split(',');
+                if (values.length === 3) {
+                    mainWindow.webContents.send('plotter-data', {
+                        channel1: parseInt(values[0]),
+                        channel2: parseInt(values[1]),
+                        channel3: parseInt(values[2])
+                    });
+                }
+            } catch (error) {
+                console.error('Error parsing plotter data:', error);
+            }
+        });
+
         return new Promise((resolve, reject) => {
             serialPort.open((err) => {
                 if (err) {
                     reject({ success: false, error: err.message });
                 } else {
-                    // Setup data monitoring
-                    if (serialMonitorActive) {
-                        serialPort.on('data', (data) => {
-                            mainWindow.webContents.send('serial-data', data.toString());
-                        });
-                    }
-
-                    // Setup error handling
-                    serialPort.on('error', (err) => {
-                        mainWindow.webContents.send('serial-error', err.message);
-                    });
-
                     resolve({ success: true });
                 }
             });
@@ -111,54 +121,45 @@ ipcMain.handle('connect-serial', async (event, portConfig) => {
     }
 });
 
-// Serial monitor control
-ipcMain.handle('toggle-serial-monitor', (event, enabled) => {
-    serialMonitorActive = enabled;
-    if (serialPort && serialPort.isOpen) {
-        if (enabled) {
-            serialPort.on('data', (data) => {
-                mainWindow.webContents.send('serial-data', data.toString());
+ipcMain.handle('disconnect-serial', async () => {
+    try {
+        if (serialPort && serialPort.isOpen) {
+            await new Promise((resolve, reject) => {
+                serialPort.close((err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
             });
-        } else {
-            serialPort.removeAllListeners('data');
+            return { success: true };
         }
+        return { success: false, error: 'Port not connected' };
+    } catch (error) {
+        return { success: false, error: error.message };
     }
-    return { success: true, enabled: serialMonitorActive };
 });
 
-// Enhanced serial data sending with validation
-ipcMain.handle('send-serial-data', (event, data) => {
+ipcMain.handle('send-serial-data', (event, { data }) => {
     return new Promise((resolve, reject) => {
         if (!serialPort || !serialPort.isOpen) {
             resolve({ success: false, error: 'Serial port not connected' });
             return;
         }
 
-        const csvString = `CFG,${data.program},${data.fadeIn},${data.fadeOut},${data.onDuration},` +
-            `${data.offDuration},${data.offset},${data.startDelay},${data.channelsQty},${data.alwaysOn ? 1 : 0}\n`;
-
-        serialPort.write(csvString, (err) => {
+        serialPort.write(data, (err) => {
             if (err) {
                 console.error('Error writing to port:', err);
                 resolve({ success: false, error: err.message });
             } else {
-                console.log('Data sent successfully:', csvString);
-                resolve({ success: true, data: csvString });
+                resolve({ success: true, data });
             }
         });
     });
 });
 
-// Configuration management with validation
+// Configuration management
 ipcMain.handle('save-config', (event, config) => {
     try {
         const configs = store.get('configs', []);
-
-        // Validate configuration before saving
-        if (!config.name || !config.program || config.channelsQty < 1 || config.channelsQty > 3) {
-            throw new Error('Invalid configuration data');
-        }
-
         const newConfig = {
             ...config,
             id: Date.now().toString(),
@@ -193,23 +194,18 @@ ipcMain.handle('delete-config', (event, configId) => {
     }
 });
 
-// Export configurations
 ipcMain.handle('export-configs', (event, format = 'json') => {
     try {
         const configs = store.get('configs', []);
-        if (format === 'json') {
-            return {
-                success: true,
-                data: JSON.stringify(configs, null, 2)
-            };
-        }
-        return { success: false, error: 'Unsupported format' };
+        return {
+            success: true,
+            data: JSON.stringify(configs, null, 2)
+        };
     } catch (error) {
         return { success: false, error: error.message };
     }
 });
 
-// Import configurations
 ipcMain.handle('import-configs', (event, data) => {
     try {
         const configs = JSON.parse(data);

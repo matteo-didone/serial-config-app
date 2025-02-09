@@ -2,6 +2,12 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { SerialPort } = require('serialport');
 
+// *** SIMULAZIONE ***
+// Imposta a true per testare senza Arduino, false per usare l'Arduino reale
+const USE_SIMULATOR = true;
+let simulatorInterval = null;
+// ********************
+
 let store;
 let mainWindow;
 let serialPort = null;
@@ -71,6 +77,38 @@ app.on('activate', () => {
     }
 });
 
+// Funzioni del simulatore
+const simulatorHelpers = {
+    startSimulation(mainWindow) {
+        if (!USE_SIMULATOR) return null;
+
+        let time = 0;
+        const SIMULATION_INTERVAL = 100; // ms
+
+        console.log('Starting data simulation mode');
+        return setInterval(() => {
+            time += SIMULATION_INTERVAL;
+            const plotData = {
+                channel1: Math.floor(512 + 512 * Math.sin(time / 1000)),
+                channel2: Math.floor(512 + 512 * Math.sin(time / 1000 + Math.PI / 3)),
+                channel3: Math.floor(512 + 512 * Math.sin(time / 1000 + 2 * Math.PI / 3))
+            };
+
+            if (mainWindow) {
+                mainWindow.webContents.send('plotter-data', plotData);
+            }
+        }, SIMULATION_INTERVAL);
+    },
+
+    stopSimulation() {
+        if (simulatorInterval) {
+            clearInterval(simulatorInterval);
+            simulatorInterval = null;
+            console.log('Simulation stopped');
+        }
+    }
+};
+
 // Funzione per ottenere le porte seriali
 async function getSerialPorts() {
     try {
@@ -114,6 +152,12 @@ ipcMain.handle('connect-serial', async (event, portConfig) => {
             });
         }
 
+        if (USE_SIMULATOR) {
+            console.log('Using simulation mode');
+            simulatorInterval = simulatorHelpers.startSimulation(mainWindow);
+            return { success: true };
+        }
+
         serialPort = new SerialPort({
             path: portConfig.path,
             baudRate: portConfig.baudRate || 9600,
@@ -153,6 +197,11 @@ ipcMain.handle('connect-serial', async (event, portConfig) => {
 
 ipcMain.handle('disconnect-serial', async () => {
     try {
+        if (USE_SIMULATOR) {
+            simulatorHelpers.stopSimulation();
+            return { success: true };
+        }
+
         if (serialPort && serialPort.isOpen) {
             await new Promise((resolve, reject) => {
                 serialPort.close(err => (err ? reject(err) : resolve()));
@@ -168,17 +217,26 @@ ipcMain.handle('disconnect-serial', async () => {
 
 ipcMain.handle('send-serial-data', (event, { data }) => {
     return new Promise((resolve) => {
+        if (USE_SIMULATOR) {
+            console.log('Simulation mode: pretending to send:', data);
+            resolve({ success: true });
+            return;
+        }
+
         if (!serialPort || !serialPort.isOpen) {
             resolve({ success: false, error: 'Serial port not connected' });
             return;
         }
+
+        console.log('Sending to serial port:', data);
 
         serialPort.write(data, err => {
             if (err) {
                 console.error('Error writing to serial port:', err);
                 resolve({ success: false, error: err.message });
             } else {
-                resolve({ success: true, data });
+                console.log('Data sent successfully:', data);
+                resolve({ success: true });
             }
         });
     });
@@ -221,26 +279,38 @@ ipcMain.handle('delete-config', (event, configId) => {
     }
 });
 
-ipcMain.handle('export-configs', () => {
+// Gestione import/export CSV
+ipcMain.handle('import-configs', (event, csvContent) => {
     try {
-        return {
-            success: true,
-            data: JSON.stringify(store.get('configs', []), null, 2)
-        };
-    } catch (error) {
-        console.error('Error in export-configs:', error);
-        return { success: false, error: error.message };
-    }
-});
+        const lines = csvContent.split('\n').filter(line => line.trim());
+        const startIndex = lines[0].toLowerCase().startsWith('cfg,name') ? 1 : 0;
+        const configs = [];
 
-ipcMain.handle('import-configs', (event, data) => {
-    try {
-        const configs = JSON.parse(data);
-        if (!Array.isArray(configs)) {
-            throw new Error('Invalid configuration format');
+        for (let i = startIndex; i < lines.length; i++) {
+            const parts = lines[i].split(',');
+            if (parts.length >= 13 && parts[0].trim() === 'CFG') {
+                const config = {
+                    id: Date.now().toString() + i,
+                    name: parts[1].trim() || `Config ${i}`,
+                    program: parts[2].trim(),
+                    fadeIn: parts[3].trim(),
+                    fadeOut: parts[4].trim(),
+                    onDuration: parts[5].trim(),
+                    offDuration: parts[6].trim(),
+                    offset: parts[7].trim(),
+                    startDelay: parts[8].trim(),
+                    channelsQty: parts[9].trim(),
+                    maxBrightness: parts[10].trim(),
+                    forceStatus: parts[11].trim(),
+                    targetChannel: parts[12].trim()
+                };
+                configs.push(config);
+            }
         }
+
+        // Aggiorna le configurazioni esistenti con quelle nuove
         store.set('configs', configs);
-        return { success: true };
+        return { success: true, count: configs.length };
     } catch (error) {
         console.error('Error in import-configs:', error);
         return { success: false, error: error.message };

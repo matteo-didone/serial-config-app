@@ -11,7 +11,9 @@ import {
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-const ConnectionManager = ({ onConnectionChange }) => {
+const ipcRenderer = window.electron.ipcRenderer;
+
+export function ConnectionManager({ onConnectionChange }) {
   const [serialPorts, setSerialPorts] = useState([]);
   const [selectedPort, setSelectedPort] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
@@ -21,15 +23,9 @@ const ConnectionManager = ({ onConnectionChange }) => {
   const loadSerialPorts = async () => {
     try {
       const result = await ipcRenderer.invoke("get-serial-ports");
-      console.log("Raw serial ports response:", result); // Debug log
-
-      // Non assumiamo più una struttura con .data
-      const portsArray = Array.isArray(result) ? result : [];
-      console.log("Processed ports array:", portsArray); // Debug log
-
+      const portsArray = Array.isArray(result.data) ? result.data : [];
       setSerialPorts(portsArray.filter((port) => port && port.path));
 
-      // Mantieni la selezione se la porta è ancora disponibile
       if (
         selectedPort &&
         !portsArray.some((port) => port.path === selectedPort)
@@ -44,7 +40,7 @@ const ConnectionManager = ({ onConnectionChange }) => {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Failed to load serial ports: " + error.message,
+        description: "Failed to load serial ports",
       });
       setSerialPorts([]);
     }
@@ -68,13 +64,10 @@ const ConnectionManager = ({ onConnectionChange }) => {
 
     setIsConnecting(true);
     try {
-      const result = await window.electron.ipcRenderer.invoke(
-        "connect-serial",
-        {
-          path: selectedPort,
-          baudRate: 9600,
-        }
-      );
+      const result = await ipcRenderer.invoke("connect-serial", {
+        path: selectedPort,
+        baudRate: 9600,
+      });
 
       if (result.success) {
         setIsConnected(true);
@@ -86,8 +79,8 @@ const ConnectionManager = ({ onConnectionChange }) => {
       } else {
         toast({
           variant: "destructive",
-          title: "Connection Failed",
-          description: result.error || "Failed to connect to port",
+          title: "Error",
+          description: result.error || "Failed to connect",
         });
       }
     } catch (error) {
@@ -103,9 +96,7 @@ const ConnectionManager = ({ onConnectionChange }) => {
 
   const handleDisconnect = async () => {
     try {
-      const result = await window.electron.ipcRenderer.invoke(
-        "disconnect-serial"
-      );
+      const result = await ipcRenderer.invoke("disconnect-serial");
       if (result.success) {
         setIsConnected(false);
         onConnectionChange(false);
@@ -130,9 +121,9 @@ const ConnectionManager = ({ onConnectionChange }) => {
   };
 
   return (
-    <Card className="bg-white shadow-sm">
+    <Card className="mb-6">
       <CardContent className="p-6">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1">
             <Select value={selectedPort} onValueChange={setSelectedPort}>
               <SelectTrigger className="w-full">
@@ -158,8 +149,7 @@ const ConnectionManager = ({ onConnectionChange }) => {
           </div>
 
           <Button
-            variant="default"
-            className="min-w-[120px]"
+            className="md:w-32"
             onClick={isConnected ? handleDisconnect : handleConnect}
             disabled={!selectedPort || isConnecting}
           >
@@ -178,6 +168,4 @@ const ConnectionManager = ({ onConnectionChange }) => {
       </CardContent>
     </Card>
   );
-};
-
-export default ConnectionManager;
+}

@@ -13,7 +13,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Save, Trash2, Download, Upload, FolderOpen } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-export function SavedConfigs({ onLoadConfig, currentConfig }) {
+const ipcRenderer = window.electron.ipcRenderer;
+
+export function SavedConfigs({ onLoadConfig, currentConfig, isSidebarOpen }) {
   const [configs, setConfigs] = useState([]);
   const [newConfigName, setNewConfigName] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -27,9 +29,8 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
 
   const loadConfigs = async () => {
     try {
-      const response = await window.electron.ipcRenderer.invoke("load-configs");
-      const configsArray = Array.isArray(response.data) ? response.data : [];
-      setConfigs(configsArray);
+      const response = await ipcRenderer.invoke("load-configs");
+      setConfigs(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
       console.error("Error loading configurations:", error);
       toast({
@@ -51,7 +52,7 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
     }
 
     try {
-      const result = await window.electron.ipcRenderer.invoke("save-config", {
+      const result = await ipcRenderer.invoke("save-config", {
         ...currentConfig,
         name: newConfigName,
       });
@@ -76,10 +77,7 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
 
   const handleDelete = async (configId) => {
     try {
-      const result = await window.electron.ipcRenderer.invoke(
-        "delete-config",
-        configId
-      );
+      const result = await ipcRenderer.invoke("delete-config", configId);
       if (result.success) {
         await loadConfigs();
         setShowDeleteDialog(false);
@@ -100,25 +98,33 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
 
   const handleExport = async () => {
     try {
-      const result = await window.electron.ipcRenderer.invoke("export-configs");
-      if (result.success) {
-        const blob = new Blob([JSON.stringify(result.data, null, 2)], {
-          type: "application/json",
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "serial-configs.json";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+      // Prepare CSV data
+      const csvHeader =
+        "CFG,Program,FadeIn,FadeOut,OnDuration,OffDuration,Offset,StartDelay,ChannelsQty,MaxBrightness,ForceStatus,TargetChannel\n";
+      const csvRows = configs
+        .map(
+          (config) =>
+            `CFG,${config.program},${config.fadeIn},${config.fadeOut},${config.onDuration},` +
+            `${config.offDuration},${config.offset},${config.startDelay},${config.channelsQty},` +
+            `${config.maxBrightness},${config.forceStatus},${config.targetChannel}`
+        )
+        .join("\n");
 
-        toast({
-          title: "Success",
-          description: "Configurations exported successfully",
-        });
-      }
+      const csvContent = csvHeader + csvRows;
+      const blob = new Blob([csvContent], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "serial-configs.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Success",
+        description: "Configurations exported successfully",
+      });
     } catch (error) {
       console.error("Error exporting configurations:", error);
       toast({
@@ -137,15 +143,20 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
       const reader = new FileReader();
       reader.onload = async (e) => {
         try {
-          const result = await window.electron.ipcRenderer.invoke(
-            "import-configs",
-            e.target.result
-          );
+          const csvContent = e.target.result;
+          const result = await ipcRenderer.invoke("import-configs", csvContent);
+
           if (result.success) {
             await loadConfigs();
             toast({
               title: "Success",
-              description: "Configurations imported successfully",
+              description: `Imported ${result.count} configurations successfully`,
+            });
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Error",
+              description: result.error || "Failed to import configurations",
             });
           }
         } catch (error) {
@@ -153,7 +164,7 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
           toast({
             variant: "destructive",
             title: "Error",
-            description: "Failed to import configurations",
+            description: "Failed to import configurations: " + error.message,
           });
         }
       };
@@ -168,96 +179,95 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
       });
     }
   };
-
+  
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      {/* Header with title and action buttons */}
-      <div className="p-6 bg-white border-b border-gray-200">
+    <div
+      className={`h-full flex flex-col bg-white border-r border-gray-200 
+      ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} 
+      transition-transform duration-200 ease-in-out`}
+    >
+      <div className="p-6 border-b border-gray-200">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold text-gray-800">
             Saved Configurations
           </h2>
-          <div className="flex items-center gap-3">
+        </div>
+      </div>
+
+      <div className="p-4 border-b border-gray-200">
+        <div className="flex flex-col gap-2">
+          <Button
+            className="w-full flex items-center justify-center gap-2"
+            onClick={() => setShowSaveDialog(true)}
+          >
+            <Save className="w-4 h-4" />
+            Save Current
+          </Button>
+
+          <div className="flex gap-2">
             <Button
+              className="flex-1 flex items-center justify-center gap-2"
               variant="outline"
-              className="flex items-center gap-2"
-              onClick={() => setShowSaveDialog(true)}
-            >
-              <Save className="w-4 h-4" /> Save
-            </Button>
-            <Button
-              variant="outline"
-              className="flex items-center gap-2"
               onClick={handleExport}
             >
-              <Download className="w-4 h-4" /> Export
+              <Download className="w-4 h-4" />
+              Export
             </Button>
             <Button
+              className="flex-1 flex items-center justify-center gap-2"
               variant="outline"
-              className="flex items-center gap-2"
               onClick={() => document.getElementById("import-input").click()}
             >
-              <Upload className="w-4 h-4" /> Import
+              <Upload className="w-4 h-4" />
+              Import
             </Button>
           </div>
         </div>
       </div>
 
-      {/* Configurations list */}
-      <ScrollArea className="flex-1 p-6">
-        <div className="space-y-4">
+      <ScrollArea className="flex-1">
+        <div className="p-4 space-y-3">
           {configs.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="text-gray-400 text-lg mb-2">
-                No saved configurations
-              </div>
-              <div className="text-gray-500 text-sm">
-                Save your first configuration using the button above
-              </div>
+            <div className="text-center py-8 text-gray-500">
+              No saved configurations
             </div>
           ) : (
             configs.map((config) => (
               <Card
                 key={config.id}
-                className="bg-white hover:shadow-md transition-shadow"
+                className="hover:shadow-md transition-shadow"
               >
-                <CardContent className="p-6">
+                <CardContent className="p-4">
                   <div className="flex justify-between items-start">
                     <div>
-                      <h3 className="text-lg font-medium mb-1">
-                        {config.name}
-                      </h3>
-                      <div className="text-sm text-gray-500 space-y-1">
-                        <p>
-                          Program{" "}
-                          {["A", "B", "C"][parseInt(config.program) - 1]}
-                        </p>
-                        <p>
-                          {config.targetChannel === "0"
-                            ? "All Channels"
-                            : `Channel ${config.targetChannel}`}
-                        </p>
-                      </div>
+                      <h3 className="font-medium">{config.name}</h3>
+                      <p className="text-sm text-gray-500">
+                        Program {["A", "B", "C"][parseInt(config.program) - 1]}{" "}
+                        |
+                        {config.targetChannel === "0"
+                          ? " All Channels"
+                          : ` Channel ${config.targetChannel}`}
+                      </p>
                     </div>
                     <div className="flex gap-2">
                       <Button
-                        variant="outline"
+                        variant="ghost"
                         size="sm"
-                        className="flex items-center gap-2"
+                        className="text-gray-500 hover:text-gray-700"
                         onClick={() => onLoadConfig(config)}
                       >
-                        <FolderOpen className="w-4 h-4" /> Load
+                        <FolderOpen className="w-4 h-4" />
                       </Button>
                       <Button
-                        variant="outline"
+                        variant="ghost"
                         size="sm"
-                        className="flex items-center gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                        className="text-red-500 hover:text-red-700"
                         onClick={() => {
                           setConfigToDelete(config);
                           setShowDeleteDialog(true);
                         }}
                       >
-                        <Trash2 className="w-4 h-4" /> Delete
+                        <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
                   </div>
@@ -271,7 +281,7 @@ export function SavedConfigs({ onLoadConfig, currentConfig }) {
       <input
         id="import-input"
         type="file"
-        accept=".json"
+        accept=".csv"
         className="hidden"
         onChange={handleImport}
       />

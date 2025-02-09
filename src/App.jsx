@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Save, Trash2, Download, Upload } from "lucide-react";
+import { Save, Trash2, Download, Upload, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -194,6 +194,7 @@ function App() {
     validateField(field, value);
   };
 
+  // Modifica della funzione validateField per gestire i secondi
   const validateField = (field, value) => {
     const newErrors = { ...errors };
     const numValue = Number(value);
@@ -211,6 +212,29 @@ function App() {
           newErrors[field] = "Must be between 1 and 100";
         } else {
           delete newErrors[field];
+        }
+        break;
+      // Gestione campi temporali (in secondi)
+      case "fadeIn":
+      case "fadeOut":
+      case "onDuration":
+      case "offDuration":
+      case "offset":
+      case "startDelay":
+        if (value === "" || isNaN(numValue)) {
+          newErrors[field] = "Must be a valid number";
+        } else if (numValue < 0) {
+          newErrors[field] = "Must be positive";
+        } else {
+          // Converti i secondi in millisecondi per il controllo
+          const msValue = numValue * 1000;
+          if (msValue > UNSIGNED_LONG_MAX) {
+            newErrors[field] = `Must be less than ${Math.floor(
+              UNSIGNED_LONG_MAX / 1000
+            )} seconds`;
+          } else {
+            delete newErrors[field];
+          }
         }
         break;
       default:
@@ -234,7 +258,7 @@ function App() {
     setErrors(newErrors);
   };
 
-  // Invio della configurazione
+  // Modifica della funzione handleSubmit per convertire i tempi in millisecondi
   const handleSubmit = async () => {
     if (Object.keys(errors).length > 0) {
       toast({
@@ -245,11 +269,28 @@ function App() {
       return;
     }
 
+    // Converti i tempi da secondi a millisecondi
+    const timeFields = [
+      "fadeIn",
+      "fadeOut",
+      "onDuration",
+      "offDuration",
+      "offset",
+      "startDelay",
+    ];
+    const convertedData = { ...formData };
+
+    timeFields.forEach((field) => {
+      convertedData[field] = (parseFloat(formData[field]) * 1000).toString();
+    });
+
     const csvData =
-      `CFG,${formData.program},${formData.fadeIn},${formData.fadeOut},` +
-      `${formData.onDuration},${formData.offDuration},${formData.offset},` +
-      `${formData.startDelay},${formData.channelsQty},${formData.maxBrightness},` +
-      `${formData.forceStatus},${formData.targetChannel}\n`;
+      `CFG,${convertedData.program},${convertedData.fadeIn},${convertedData.fadeOut},` +
+      `${convertedData.onDuration},${convertedData.offDuration},${convertedData.offset},` +
+      `${convertedData.startDelay},${convertedData.channelsQty},${convertedData.maxBrightness},` +
+      `${convertedData.forceStatus},${convertedData.targetChannel}\n`;
+
+    console.log("Sending data:", csvData); // Aggiungiamo questo log
 
     try {
       const result = await ipcRenderer.invoke("send-serial-data", {
@@ -260,6 +301,7 @@ function App() {
           title: "Success",
           description: "Configuration sent successfully",
         });
+        console.log("Configuration sent successfully"); // E questo
       } else {
         toast({
           variant: "destructive",
@@ -288,10 +330,14 @@ function App() {
     }
 
     try {
-      const result = await ipcRenderer.invoke("save-config", {
-        ...formData,
-        name: newConfigName,
-      });
+      // Crea una copia dei dati del form
+      const configToSave = { ...formData };
+
+      // I valori sono già in secondi nell'UI, quindi non serve convertire
+      // Aggiungiamo solo il nome
+      configToSave.name = newConfigName;
+
+      const result = await ipcRenderer.invoke("save-config", configToSave);
 
       if (result.success) {
         await loadConfigs();
@@ -333,6 +379,7 @@ function App() {
   };
 
   const handleLoadConfig = (config) => {
+    // I valori sono già in secondi nel database, quindi li carichiamo direttamente
     setFormData({
       program: config.program,
       channelsQty: config.channelsQty,
@@ -346,27 +393,29 @@ function App() {
       forceStatus: config.forceStatus || "0",
       targetChannel: config.targetChannel || "0",
     });
+
     toast({
       title: "Success",
       description: "Configuration loaded successfully",
     });
   };
 
+  // Export function
   const handleExport = async () => {
     try {
-      // Prepariamo l'header del CSV
+      // Add Name in the header and data
       const csvHeader =
-        "CFG,Program,FadeIn,FadeOut,OnDuration,OffDuration,Offset,StartDelay,ChannelsQty,MaxBrightness,ForceStatus,TargetChannel\n";
+        "CFG,Name,Program,FadeIn,FadeOut,OnDuration,OffDuration,Offset,StartDelay,ChannelsQty,MaxBrightness,ForceStatus,TargetChannel\n";
 
-      // Convertiamo ogni configurazione in una riga CSV
       const csvRows = configs
-        .map(
-          (config) =>
-            `CFG,${config.program},${config.fadeIn},${config.fadeOut},` +
+        .map((config) => {
+          return (
+            `CFG,${config.name},${config.program},${config.fadeIn},${config.fadeOut},` +
             `${config.onDuration},${config.offDuration},${config.offset},` +
             `${config.startDelay},${config.channelsQty},${config.maxBrightness},` +
             `${config.forceStatus},${config.targetChannel}`
-        )
+          );
+        })
         .join("\n");
 
       const csvContent = csvHeader + csvRows;
@@ -394,6 +443,7 @@ function App() {
     }
   };
 
+  // Import function
   const handleImport = async (event) => {
     try {
       const file = event.target.files[0];
@@ -405,41 +455,44 @@ function App() {
           const csvContent = e.target.result;
           const lines = csvContent.split("\n").filter((line) => line.trim());
 
-          // Saltiamo l'header se presente
-          const startIndex = lines[0].startsWith("CFG,Program") ? 1 : 0;
+          // Check if first line is header and skip it
+          const startIndex = lines[0].toLowerCase().startsWith("cfg,name")
+            ? 1
+            : 0;
 
-          const newConfigs = [];
+          const configs = [];
           for (let i = startIndex; i < lines.length; i++) {
             const parts = lines[i].split(",");
-            if (parts.length >= 12 && parts[0] === "CFG") {
-              newConfigs.push({
-                program: parts[1],
-                fadeIn: parts[2],
-                fadeOut: parts[3],
-                onDuration: parts[4],
-                offDuration: parts[5],
-                offset: parts[6],
-                startDelay: parts[7],
-                channelsQty: parts[8],
-                maxBrightness: parts[9],
-                forceStatus: parts[10],
-                targetChannel: parts[11],
-                name: `Config ${i}`, // Nome di default
-              });
+            if (parts.length >= 13 && parts[0] === "CFG") {
+              const config = {
+                name: parts[1],
+                program: parts[2],
+                fadeIn: parts[3],
+                fadeOut: parts[4],
+                onDuration: parts[5],
+                offDuration: parts[6],
+                offset: parts[7],
+                startDelay: parts[8],
+                channelsQty: parts[9],
+                maxBrightness: parts[10],
+                forceStatus: parts[11],
+                targetChannel: parts[12].trim(),
+                id: Date.now().toString() + i, // Add unique ID
+              };
+              configs.push(config);
             }
           }
 
-          if (newConfigs.length > 0) {
-            // Inviamo le nuove configurazioni al backend
+          if (configs.length > 0) {
             const result = await ipcRenderer.invoke(
               "import-configs",
-              newConfigs
+              csvContent
             );
             if (result.success) {
               await loadConfigs();
               toast({
                 title: "Success",
-                description: `Imported ${newConfigs.length} configurations successfully`,
+                description: `Imported ${configs.length} configurations successfully`,
               });
             }
           } else {
@@ -459,7 +512,7 @@ function App() {
         }
       };
       reader.readAsText(file);
-      event.target.value = ""; // Reset input
+      event.target.value = "";
     } catch (error) {
       console.error("Error reading file:", error);
       toast({
@@ -703,7 +756,6 @@ function App() {
                   </Select>
                 </div>
 
-                {/* Timing inputs */}
                 {[
                   ["fadeIn", "fadeOut"],
                   ["onDuration", "offDuration"],
@@ -712,8 +764,7 @@ function App() {
                   <React.Fragment key={field1 + field2}>
                     <div className="space-y-2">
                       <Label>
-                        {field1.charAt(0).toUpperCase() + field1.slice(1)} Time
-                        (ms)
+                        {field1.replace(/([A-Z])/g, " $1").trim()} Time (s)
                       </Label>
                       <Input
                         type="number"
@@ -723,6 +774,7 @@ function App() {
                         }
                         disabled={formData.forceStatus !== "0"}
                         min={0}
+                        step="0.1"
                       />
                       {errors[field1] && (
                         <p className="text-sm text-red-500">{errors[field1]}</p>
@@ -730,8 +782,7 @@ function App() {
                     </div>
                     <div className="space-y-2">
                       <Label>
-                        {field2.charAt(0).toUpperCase() + field2.slice(1)} Time
-                        (ms)
+                        {field2.replace(/([A-Z])/g, " $1").trim()} Time (s)
                       </Label>
                       <Input
                         type="number"
@@ -741,6 +792,7 @@ function App() {
                         }
                         disabled={formData.forceStatus !== "0"}
                         min={0}
+                        step="0.1"
                       />
                       {errors[field2] && (
                         <p className="text-sm text-red-500">{errors[field2]}</p>

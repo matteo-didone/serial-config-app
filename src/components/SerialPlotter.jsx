@@ -25,7 +25,6 @@ export function SerialPlotter({ isConnected }) {
 
   useEffect(() => {
     if (isPlotting && isConnected) {
-      // Setup event listener for serial data
       const handlePlotterData = (event, plotData) => {
         const newPoint = {
           time: new Date().getTime(),
@@ -101,18 +100,21 @@ export function SerialPlotter({ isConnected }) {
                 dataKey="channel1"
                 stroke="#8884d8"
                 dot={false}
+                name="Channel 1"
               />
               <Line
                 type="monotone"
                 dataKey="channel2"
                 stroke="#82ca9d"
                 dot={false}
+                name="Channel 2"
               />
               <Line
                 type="monotone"
                 dataKey="channel3"
                 stroke="#ff7300"
                 dot={false}
+                name="Channel 3"
               />
             </LineChart>
           </ResponsiveContainer>
